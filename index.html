@@ -609,7 +609,8 @@ document.getElementById('modal-confirm').addEventListener('click', async () => {
       setModalBusy(true, 'Guardando…');
     }
 
-    await apiPost({ action: 'upsert', number: num, name, phone, paid });
+    const debugResult = await apiPost({ action: 'upsert', number: num, name, phone, paid });
+    alert('MODO DIAGNÓSTICO — el servidor recibió:\n' + JSON.stringify(debugResult.received, null, 2) + '\n\nLa fila quedó así después de escribir:\n' + JSON.stringify(debugResult.rowAfterWrite));
     tickets[num] = { name, phone, paid, ts: Date.now() };
     flashStatus('Guardado en Sheets ✓', 'ok');
     closeModal();
