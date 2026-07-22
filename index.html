@@ -65,10 +65,30 @@
   .conn-remember{ display:flex; align-items:center; gap:6px; font-size:.74rem; opacity:.75; margin-top:8px; }
   .conn-note{ font-size:.72rem; opacity:.65; margin-top:6px; }
 
-  .save-status{ text-align:center; font-size:.78rem; margin:2px 0 0; min-height:1.2em; font-weight:600; }
+  .save-status{ text-align:center; font-size:.78rem; margin:2px 0 0; min-height:1.2em; font-weight:600; display:flex; align-items:center; justify-content:center; gap:8px; }
   .save-status.ok{ color:var(--olive-800); }
   .save-status.err{ color:var(--danger); }
   .save-status.saving{ color:var(--gold-700); }
+
+  @keyframes spin{ to{ transform:rotate(360deg); } }
+  .spinner{
+    display:inline-block; width:14px; height:14px; border-radius:50%;
+    border:2px solid rgba(168,122,50,.25); border-top-color:var(--gold-700);
+    animation:spin .7s linear infinite; flex-shrink:0;
+  }
+  .spinner.big{ width:22px; height:22px; border-width:3px; }
+  .spinner.on-dark{ border-color:rgba(255,255,255,.35); border-top-color:#fff; }
+
+  .sync-badge{
+    position:fixed; top:14px; right:14px; z-index:80;
+    display:none; align-items:center; gap:8px;
+    background:var(--olive-950); color:var(--cream-card);
+    padding:8px 14px; border-radius:999px; font-size:.75rem; font-weight:600;
+    box-shadow:var(--shadow);
+  }
+  .sync-badge.show{ display:flex; }
+
+  .btn-spinner-label{ display:inline-flex; align-items:center; gap:8px; justify-content:center; }
 
   .stats{ display:flex; justify-content:center; gap:22px; margin:18px 0 20px; flex-wrap:wrap; }
   .stat{ text-align:center; }
@@ -212,6 +232,7 @@
 </style>
 </head>
 <body>
+<div class="sync-badge" id="sync-badge"><span class="spinner on-dark"></span> Sincronizando…</div>
 <div class="wrap">
   <div class="top">
     <div class="eyebrow">Gran Rifa</div>
@@ -267,7 +288,7 @@
 
   <div id="grid-wrap">
     <div id="locked-msg">Conecta tu Google Sheet arriba para ver y marcar las boletas.</div>
-    <div id="loading" style="display:none;">Cargando boletos desde Google Sheets…</div>
+    <div id="loading" style="display:none;"><span class="spinner big"></span><br><br>Cargando boletos desde Google Sheets…</div>
     <div class="ticket-grid" id="ticket-grid" style="display:none;"></div>
   </div>
 
@@ -335,10 +356,14 @@ const saveStatus = document.getElementById('save-status');
 function pad(n){ return String(n).padStart(3,'0'); }
 
 function flashStatus(msg, kind){
-  saveStatus.textContent = msg;
   saveStatus.className = 'save-status ' + kind;
+  if(kind === 'saving' && msg){
+    saveStatus.innerHTML = '<span class="spinner"></span> ' + msg;
+  } else {
+    saveStatus.textContent = msg;
+  }
   if(kind !== 'saving'){
-    setTimeout(() => { if(saveStatus.textContent === msg) saveStatus.textContent = ''; }, 2500);
+    setTimeout(() => { if(saveStatus.textContent === msg || saveStatus.innerHTML.includes(msg)) saveStatus.innerHTML = ''; }, 2500);
   }
 }
 
@@ -384,22 +409,43 @@ function startAutoRefresh(){
   }, 20000);
 }
 
+let syncCount = 0;
+const syncBadge = document.getElementById('sync-badge');
+function syncStart(){
+  syncCount++;
+  syncBadge.classList.add('show');
+}
+function syncEnd(){
+  syncCount = Math.max(0, syncCount - 1);
+  if(syncCount === 0) syncBadge.classList.remove('show');
+}
+
 async function apiGet(){
-  const res = await fetch(SCRIPT_URL, { method: 'GET' });
-  const data = await res.json();
-  if(!data.ok) throw new Error(data.error || 'Error al leer la hoja');
-  return data.tickets || {};
+  syncStart();
+  try{
+    const res = await fetch(SCRIPT_URL, { method: 'GET' });
+    const data = await res.json();
+    if(!data.ok) throw new Error(data.error || 'Error al leer la hoja');
+    return data.tickets || {};
+  } finally {
+    syncEnd();
+  }
 }
 
 async function apiPost(body){
-  const res = await fetch(SCRIPT_URL, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(body)
-  });
-  const data = await res.json();
-  if(!data.ok) throw new Error(data.error || 'Error al guardar en la hoja');
-  return data;
+  syncStart();
+  try{
+    const res = await fetch(SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if(!data.ok) throw new Error(data.error || 'Error al guardar en la hoja');
+    return data;
+  } finally {
+    syncEnd();
+  }
 }
 
 async function loadTickets(){
@@ -499,6 +545,22 @@ function closeModal(){
 document.getElementById('modal-cancel').addEventListener('click', closeModal);
 modalBg.addEventListener('click', (e)=>{ if(e.target === modalBg) closeModal(); });
 
+const modalConfirmBtn = document.getElementById('modal-confirm');
+const modalConfirmDefaultLabel = modalConfirmBtn.textContent;
+const modalFreeDefaultLabel = modalFreeBtn.textContent;
+
+function setModalBusy(isBusy, busyLabel){
+  modalConfirmBtn.disabled = isBusy;
+  modalFreeBtn.disabled = isBusy;
+  document.getElementById('modal-cancel').disabled = isBusy;
+  if(isBusy){
+    modalConfirmBtn.innerHTML = `<span class="btn-spinner-label"><span class="spinner on-dark"></span>${busyLabel || 'Guardando…'}</span>`;
+  } else {
+    modalConfirmBtn.textContent = modalConfirmDefaultLabel;
+    modalFreeBtn.textContent = modalFreeDefaultLabel;
+  }
+}
+
 document.getElementById('modal-confirm').addEventListener('click', async () => {
   const name = buyerName.value.trim();
   const phone = buyerPhone.value.trim();
@@ -510,25 +572,41 @@ document.getElementById('modal-confirm').addEventListener('click', async () => {
   if(!selectedNumber) return;
   const num = selectedNumber;
 
+  setModalBusy(true, 'Verificando…');
   flashStatus('Verificando cambios recientes…', 'saving');
   try{
     const latest = await apiGet();
     const latestSnapshot = JSON.stringify(latest[num] || null);
     if(latestSnapshot !== modalSnapshot){
-      // someone else changed this exact ticket while the modal was open — don't blindly overwrite
+      // someone else changed this exact ticket while the modal was open — ask explicitly, never silently discard what this person just entered
       tickets = latest;
       const info = latest[num];
-      buyerName.value = info ? info.name || '' : '';
-      buyerPhone.value = info ? info.phone || '' : '';
-      buyerPaid.checked = info ? !!info.paid : false;
-      modalSnapshot = JSON.stringify(info || null);
-      editingExisting = !!info;
-      modalFreeBtn.style.display = editingExisting ? 'block' : 'none';
-      modalErr.textContent = 'Otra persona actualizó este boleto mientras lo tenías abierto. Se refrescaron los datos — revisa y dale Guardar de nuevo si quieres continuar.';
-      renderGrid();
-      updateStats();
-      flashStatus('', 'ok');
-      return;
+      const theirName = info ? (info.name || '(sin nombre)') : '(disponible / sin vender)';
+      const theirPaid = info ? (info.paid ? 'Sí' : 'No') : '—';
+      setModalBusy(false);
+      const keepMine = confirm(
+        `Este boleto cambió en Sheets mientras lo tenías abierto.\n\n` +
+        `Ahora mismo dice: ${theirName} — pagado: ${theirPaid}\n\n` +
+        `Aceptar = guardar tus datos de todas formas (${name} — pagado: ${paid ? 'Sí' : 'No'})\n` +
+        `Cancelar = descartar lo que escribiste y ver los datos actuales`
+      );
+      if(!keepMine){
+        buyerName.value = info ? info.name || '' : '';
+        buyerPhone.value = info ? info.phone || '' : '';
+        buyerPaid.checked = info ? !!info.paid : false;
+        modalSnapshot = JSON.stringify(info || null);
+        editingExisting = !!info;
+        modalFreeBtn.style.display = editingExisting ? 'block' : 'none';
+        modalErr.textContent = 'Se cargaron los datos más recientes. Revisa y dale Guardar si quieres hacer algún cambio.';
+        renderGrid();
+        updateStats();
+        flashStatus('', 'ok');
+        return;
+      }
+      setModalBusy(true, 'Guardando…');
+      // "keep mine" — fall through and save exactly what this person entered (name/phone/paid captured above), nothing gets silently reset
+    } else {
+      setModalBusy(true, 'Guardando…');
     }
 
     await apiPost({ action: 'upsert', number: num, name, phone, paid });
@@ -540,12 +618,15 @@ document.getElementById('modal-confirm').addEventListener('click', async () => {
   }catch(e){
     modalErr.textContent = 'No se pudo guardar. Intenta de nuevo.';
     flashStatus('Error al guardar', 'err');
+  } finally {
+    setModalBusy(false);
   }
 });
 
 modalFreeBtn.addEventListener('click', async () => {
   if(!selectedNumber) return;
   if(!confirm(`¿Seguro que quieres liberar el boleto #${selectedNumber}? Esto borra el registro de comprador y pago.`)) return;
+  setModalBusy(true, 'Liberando…');
   flashStatus('Guardando en Sheets…', 'saving');
   try{
     await apiPost({ action: 'delete', number: selectedNumber });
@@ -556,6 +637,8 @@ modalFreeBtn.addEventListener('click', async () => {
     updateStats();
   }catch(e){
     flashStatus('Error al guardar', 'err');
+  } finally {
+    setModalBusy(false);
   }
 });
 
@@ -596,6 +679,11 @@ document.getElementById('bulk-apply-btn').addEventListener('click', async () => 
     items.push({ number: pad(num), name: parts[1] || '', phone: parts[2] || '', paid: parsePaidFlag(parts[3]) });
   });
   if(items.length === 0){ flashStatus('No había boletos válidos para guardar.', 'err'); return; }
+
+  const bulkBtn = document.getElementById('bulk-apply-btn');
+  const bulkBtnLabel = bulkBtn.textContent;
+  bulkBtn.disabled = true;
+  bulkBtn.innerHTML = '<span class="btn-spinner-label"><span class="spinner on-dark"></span>Guardando…</span>';
   flashStatus('Guardando en Sheets…', 'saving');
   try{
     await apiPost({ action: 'bulk', items });
@@ -608,6 +696,9 @@ document.getElementById('bulk-apply-btn').addEventListener('click', async () => 
     updateStats();
   }catch(e){
     flashStatus('Error al guardar la lista', 'err');
+  } finally {
+    bulkBtn.disabled = false;
+    bulkBtn.textContent = bulkBtnLabel;
   }
 });
 document.getElementById('bulk-clear-btn').addEventListener('click', () => {
