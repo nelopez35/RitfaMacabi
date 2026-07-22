@@ -367,7 +367,22 @@ document.getElementById('connect-btn').addEventListener('click', () => {
     try{ localStorage.removeItem(LS_KEY); }catch(e){}
   }
   loadTickets();
+  startAutoRefresh();
 });
+
+let autoRefreshTimer = null;
+function startAutoRefresh(){
+  if(autoRefreshTimer) clearInterval(autoRefreshTimer);
+  autoRefreshTimer = setInterval(async () => {
+    if(!SCRIPT_URL) return;
+    if(modalBg.classList.contains('show')) return; // don't yank the grid while someone is mid-edit
+    try{
+      tickets = await apiGet();
+      renderGrid(document.getElementById('search-input').value.trim() || undefined);
+      updateStats();
+    }catch(e){ /* silent — the next manual refresh or edit will surface any real problem */ }
+  }, 20000);
+}
 
 async function apiGet(){
   const res = await fetch(SCRIPT_URL, { method: 'GET' });
@@ -440,27 +455,45 @@ function renderGrid(query){
   }
 }
 
-function openModal(num){
+let modalSnapshot = null; // JSON string of the ticket's state at the moment the modal opened, used to detect conflicting edits from other people
+
+async function openModal(num){
   if(!SCRIPT_URL){ alert('Conecta tu Google Sheet primero.'); return; }
   selectedNumber = num;
+
+  // refresh from Google Sheets first, so we never edit on top of a stale local copy
+  modalTitle.textContent = `Boleto #${num}`;
+  modalSub.textContent = 'Consultando el estado más reciente en Sheets…';
+  modalErr.textContent = '';
+  buyerName.value = ''; buyerPhone.value = ''; buyerPaid.checked = false;
+  modalFreeBtn.style.display = 'none';
+  modalBg.classList.add('show');
+
+  try{
+    tickets = await apiGet();
+  }catch(e){
+    modalSub.textContent = 'No se pudo confirmar el estado más reciente (sin conexión). Ten cuidado, esta información podría estar desactualizada.';
+  }
+  renderGrid();
+  updateStats();
+
   const info = tickets[num];
   editingExisting = !!info;
-  modalTitle.textContent = `Boleto #${num}`;
+  modalSnapshot = JSON.stringify(info || null);
   modalSub.textContent = editingExisting
     ? 'Este boleto ya está registrado. Puedes editarlo o liberarlo.'
     : 'Registra el comprador para marcarlo como vendido.';
-  modalErr.textContent = '';
   buyerName.value = info ? info.name || '' : '';
   buyerPhone.value = info ? info.phone || '' : '';
   buyerPaid.checked = info ? !!info.paid : false;
   modalFreeBtn.style.display = editingExisting ? 'block' : 'none';
-  modalBg.classList.add('show');
   setTimeout(()=>buyerName.focus(), 50);
 }
 
 function closeModal(){
   modalBg.classList.remove('show');
   selectedNumber = null;
+  modalSnapshot = null;
 }
 
 document.getElementById('modal-cancel').addEventListener('click', closeModal);
@@ -475,10 +508,31 @@ document.getElementById('modal-confirm').addEventListener('click', async () => {
     return;
   }
   if(!selectedNumber) return;
-  flashStatus('Guardando en Sheets…', 'saving');
+  const num = selectedNumber;
+
+  flashStatus('Verificando cambios recientes…', 'saving');
   try{
-    await apiPost({ action: 'upsert', number: selectedNumber, name, phone, paid });
-    tickets[selectedNumber] = { name, phone, paid, ts: Date.now() };
+    const latest = await apiGet();
+    const latestSnapshot = JSON.stringify(latest[num] || null);
+    if(latestSnapshot !== modalSnapshot){
+      // someone else changed this exact ticket while the modal was open — don't blindly overwrite
+      tickets = latest;
+      const info = latest[num];
+      buyerName.value = info ? info.name || '' : '';
+      buyerPhone.value = info ? info.phone || '' : '';
+      buyerPaid.checked = info ? !!info.paid : false;
+      modalSnapshot = JSON.stringify(info || null);
+      editingExisting = !!info;
+      modalFreeBtn.style.display = editingExisting ? 'block' : 'none';
+      modalErr.textContent = 'Otra persona actualizó este boleto mientras lo tenías abierto. Se refrescaron los datos — revisa y dale Guardar de nuevo si quieres continuar.';
+      renderGrid();
+      updateStats();
+      flashStatus('', 'ok');
+      return;
+    }
+
+    await apiPost({ action: 'upsert', number: num, name, phone, paid });
+    tickets[num] = { name, phone, paid, ts: Date.now() };
     flashStatus('Guardado en Sheets ✓', 'ok');
     closeModal();
     renderGrid();
@@ -491,6 +545,7 @@ document.getElementById('modal-confirm').addEventListener('click', async () => {
 
 modalFreeBtn.addEventListener('click', async () => {
   if(!selectedNumber) return;
+  if(!confirm(`¿Seguro que quieres liberar el boleto #${selectedNumber}? Esto borra el registro de comprador y pago.`)) return;
   flashStatus('Guardando en Sheets…', 'saving');
   try{
     await apiPost({ action: 'delete', number: selectedNumber });
