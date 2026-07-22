@@ -246,7 +246,6 @@
     <button class="secondary" id="clear-search-btn">Limpiar</button>
     <button class="secondary" id="refresh-btn">Recargar de Sheets</button>
     <button class="gold" id="export-btn">Exportar para Instagram</button>
-    <button class="danger" id="reset-all-btn">Vaciar todo</button>
   </div>
 
   <details class="bulk-box">
@@ -558,21 +557,6 @@ document.getElementById('bulk-apply-btn').addEventListener('click', async () => 
 });
 document.getElementById('bulk-clear-btn').addEventListener('click', () => {
   document.getElementById('bulk-text').value = '';
-});
-
-document.getElementById('reset-all-btn').addEventListener('click', async () => {
-  if(!SCRIPT_URL){ alert('Conecta tu Google Sheet primero.'); return; }
-  if(!confirm('¿Seguro que quieres borrar todas las boletas vendidas registradas en tu Google Sheet? Esta acción no se puede deshacer.')) return;
-  flashStatus('Vaciando en Sheets…', 'saving');
-  try{
-    await apiPost({ action: 'clear' });
-    tickets = {};
-    flashStatus('Vaciado ✓', 'ok');
-    renderGrid();
-    updateStats();
-  }catch(e){
-    flashStatus('Error al vaciar', 'err');
-  }
 });
 
 /* ================= EXPORT: Instagram story image (canvas) ================= */
